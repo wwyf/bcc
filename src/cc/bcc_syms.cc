@@ -47,9 +47,9 @@ bool ProcStat::is_stale() {
 ProcStat::ProcStat(int pid)
     : procfs_(tfm::format("/proc/%d/exe", pid)), inode_(getinode_()) {}
 
-void KSyms::_add_symbol(const char *symname, uint64_t addr, void *p) {
+void KSyms::_add_symbol(const char *symname, const char *modname, uint64_t addr, void *p) {
   KSyms *ks = static_cast<KSyms *>(p);
-  ks->syms_.emplace_back(symname, addr);
+  ks->syms_.emplace_back(symname, modname, addr);
 }
 
 void KSyms::refresh() {
@@ -67,13 +67,13 @@ bool KSyms::resolve_addr(uint64_t addr, struct bcc_symbol *sym, bool demangle) {
   if (syms_.empty())
     goto unknown_symbol;
 
-  it = std::upper_bound(syms_.begin(), syms_.end(), Symbol("", addr));
+  it = std::upper_bound(syms_.begin(), syms_.end(), Symbol("", "", addr));
   if (it != syms_.begin()) {
     it--;
     sym->name = (*it).name.c_str();
     if (demangle)
       sym->demangle_name = sym->name;
-    sym->module = "kernel";
+    sym->module = (*it).mod.c_str();
     sym->offset = addr - (*it).addr;
     return true;
   }
@@ -110,7 +110,7 @@ ProcSyms::ProcSyms(int pid, struct bcc_symbol_option *option)
     symbol_option_ = {
       .use_debug_file = 1,
       .check_debug_file_crc = 1,
-      .lazy_symbolize = 0,
+      .lazy_symbolize = 1,
       .use_symbol_type = (1 << STT_FUNC) | (1 << STT_GNU_IFUNC)
     };
   load_modules();
@@ -435,7 +435,7 @@ bool BuildSyms::Module::load_sym_table()
   symbol_option_ = {
     .use_debug_file = 1,
     .check_debug_file_crc = 1,
-    .lazy_symbolize = 0,
+    .lazy_symbolize = 1,
     .use_symbol_type = (1 << STT_FUNC) | (1 << STT_GNU_IFUNC)
   };
 
@@ -671,7 +671,7 @@ int bcc_foreach_function_symbol(const char *module, SYM_CB cb) {
   static struct bcc_symbol_option default_option = {
     .use_debug_file = 1,
     .check_debug_file_crc = 1,
-    .lazy_symbolize = 0,
+    .lazy_symbolize = 1,
     .use_symbol_type = (1 << STT_FUNC) | (1 << STT_GNU_IFUNC)
   };
 
@@ -710,7 +710,7 @@ int bcc_resolve_symname(const char *module, const char *symname,
   static struct bcc_symbol_option default_option = {
     .use_debug_file = 1,
     .check_debug_file_crc = 1,
-    .lazy_symbolize = 0,
+    .lazy_symbolize = 1,
 #if defined(__powerpc64__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     .use_symbol_type = BCC_SYM_ALL_TYPES | (1 << STT_PPC64LE_SYM_LEP),
 #else

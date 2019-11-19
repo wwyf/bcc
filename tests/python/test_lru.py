@@ -26,8 +26,10 @@ class TestLru(unittest.TestCase):
         int hello_world(void *ctx) {
             u32 key=0;
             u32 value = 0, *val;
-            val = stats.lookup_or_init(&key, &value);
-            *val += 1;
+            val = stats.lookup_or_try_init(&key, &value);
+            if (val) {
+                *val += 1;
+            }
             return 0;
         }
         """

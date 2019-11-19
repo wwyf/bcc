@@ -58,6 +58,8 @@ class BPF {
                    const std::vector<std::string>& cflags = {},
                    const std::vector<USDT>& usdt = {});
 
+  StatusTuple init_usdt(const USDT& usdt);
+
   ~BPF();
   StatusTuple detach_all();
 
@@ -75,11 +77,13 @@ class BPF {
                             const std::string& probe_func,
                             uint64_t symbol_addr = 0,
                             bpf_probe_attach_type attach_type = BPF_PROBE_ENTRY,
-                            pid_t pid = -1);
+                            pid_t pid = -1,
+                            uint64_t symbol_offset = 0);
   StatusTuple detach_uprobe(const std::string& binary_path,
                             const std::string& symbol, uint64_t symbol_addr = 0,
                             bpf_probe_attach_type attach_type = BPF_PROBE_ENTRY,
-                            pid_t pid = -1);
+                            pid_t pid = -1,
+                            uint64_t symbol_offset = 0);
   StatusTuple attach_usdt(const USDT& usdt, pid_t pid = -1);
   StatusTuple detach_usdt(const USDT& usdt, pid_t pid = -1);
 
@@ -239,7 +243,10 @@ class BPF {
   StatusTuple check_binary_symbol(const std::string& binary_path,
                                   const std::string& symbol,
                                   uint64_t symbol_addr, std::string& module_res,
-                                  uint64_t& offset_res);
+                                  uint64_t& offset_res,
+                                  uint64_t symbol_offset = 0);
+
+  void init_fail_reset();
 
   int flag_;
 
@@ -252,6 +259,7 @@ class BPF {
   std::map<std::string, int> funcs_;
 
   std::vector<USDT> usdt_;
+  std::string all_bpf_program_;
 
   std::map<std::string, open_probe_t> kprobes_;
   std::map<std::string, open_probe_t> uprobes_;

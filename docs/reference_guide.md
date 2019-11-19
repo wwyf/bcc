@@ -45,7 +45,7 @@ This guide is incomplete. If something feels missing, check the bcc and kernel s
         - [10. BPF_DEVMAP](#10-bpf_devmap)
         - [11. BPF_CPUMAP](#11-bpf_cpumap)
         - [12. map.lookup()](#12-maplookup)
-        - [13. map.lookup_or_init()](#13-maplookup_or_init)
+        - [13. map.lookup_or_try_init()](#13-maplookup_or_try_init)
         - [14. map.delete()](#14-mapdelete)
         - [15. map.update()](#15-mapupdate)
         - [16. map.insert()](#16-mapinsert)
@@ -86,6 +86,7 @@ This guide is incomplete. If something feels missing, check the bcc and kernel s
         - [2. ksymname()](#2-ksymname)
         - [3. sym()](#3-sym)
         - [4. num_open_kprobes()](#4-num_open_kprobes)
+        - [5. get_syscall_fnname()](#5-get_syscall_fnname)
 
 - [BPF Errors](#bpf-errors)
     - [1. Invalid mem access](#1-invalid-mem-access)
@@ -244,6 +245,8 @@ int do_trace(struct pt_regs *ctx) {
 
 This reads the sixth USDT argument, and then pulls it in as a string to ```path```.
 
+When initializing USDTs via the third argument of ```BPF::init``` in the C API, if any USDT fails to ```init```, entire ```BPF::init``` will fail. If you're OK with some USDTs failing to ```init```, use ```BPF::init_usdt``` before calling ```BPF::init```.
+
 Examples in situ:
 [code](https://github.com/iovisor/bcc/commit/4f88a9401357d7b75e917abd994aa6ea97dda4d3#diff-04a7cad583be5646080970344c48c1f4R24),
 [search /examples](https://github.com/iovisor/bcc/search?q=bpf_usdt_readarg+path%3Aexamples&type=Code),
@@ -255,7 +258,7 @@ Syntax: RAW_TRACEPOINT_PROBE(*event*)
 
 This is a macro that instruments the raw tracepoint defined by *event*.
 
-The argument is a pointer to struct ```bpf_raw_tracepoint_args```, which is defined in [bpf.h](https://github.com/iovisor/bcc/blob/master/src/cc/compat/linux/bpf.h).  The struct field ```args``` contains all parameters of the raw tracepoint where you can found at linux tree [include/trace/events](https://github.com/torvalds/linux/tree/master/include/trace/events)
+The argument is a pointer to struct ```bpf_raw_tracepoint_args```, which is defined in [bpf.h](https://github.com/iovisor/bcc/blob/master/src/cc/compat/linux/virtual_bpf.h).  The struct field ```args``` contains all parameters of the raw tracepoint where you can found at linux tree [include/trace/events](https://github.com/torvalds/linux/tree/master/include/trace/events)
 directory.
 
 For example:
@@ -537,7 +540,7 @@ Syntax: ```BPF_TABLE(_table_type, _key_type, _leaf_type, _name, _max_entries)```
 
 Creates a map named ```_name```. Most of the time this will be used via higher-level macros, like BPF_HASH, BPF_HIST, etc.
 
-Methods (covered later): map.lookup(), map.lookup_or_init(), map.delete(), map.update(), map.insert(), map.increment().
+Methods (covered later): map.lookup(), map.lookup_or_try_init(), map.delete(), map.update(), map.insert(), map.increment().
 
 Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=BPF_TABLE+path%3Aexamples&type=Code),
@@ -570,7 +573,7 @@ BPF_HASH(start, struct request *);
 
 This creates a hash named ```start``` where the key is a ```struct request *```, and the value defaults to u64. This hash is used by the disksnoop.py example for saving timestamps for each I/O request, where the key is the pointer to struct request, and the value is the timestamp.
 
-Methods (covered later): map.lookup(), map.lookup_or_init(), map.delete(), map.update(), map.insert(), map.increment().
+Methods (covered later): map.lookup(), map.lookup_or_try_init(), map.delete(), map.update(), map.insert(), map.increment().
 
 Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=BPF_HASH+path%3Aexamples&type=Code),
@@ -669,6 +672,9 @@ Syntax: ```BPF_PERCPU_ARRAY(name [, leaf_type [, size]])```
 
 Creates NUM_CPU int-indexed arrays which are optimized for fastest lookup and update, named ```name```, with optional parameters. Each CPU will have a separate copy of this array. The copies are not kept synchronized in any way.
 
+Note that due to limits defined in the kernel (in linux/mm/percpu.c), the ```leaf_type``` cannot have a size of more than 32KB.
+In other words, ```BPF_PERCPU_ARRAY``` elements cannot be larger than 32KB in size.
+
 
 Defaults: ```BPF_PERCPU_ARRAY(name, leaf_type=u64, size=10240)```
 
@@ -702,7 +708,7 @@ BPF_LPM_TRIE(trie, struct key_v6);
 
 This creates an LPM trie map named `trie` where the key is a `struct key_v6`, and the value defaults to u64.
 
-Methods (covered later): map.lookup(), map.lookup_or_init(), map.delete(), map.update(), map.insert(), map.increment().
+Methods (covered later): map.lookup(), map.lookup_or_try_init(), map.delete(), map.update(), map.insert(), map.increment().
 
 Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=BPF_LPM_TRIE+path%3Aexamples&type=Code),
@@ -763,15 +769,18 @@ Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=lookup+path%3Aexamples&type=Code),
 [search /tools](https://github.com/iovisor/bcc/search?q=lookup+path%3Atools&type=Code)
 
-### 13. map.lookup_or_init()
+### 13. map.lookup_or_try_init()
 
-Syntax: ```*val map.lookup_or_init(&key, &zero)```
+Syntax: ```*val map.lookup_or_try_init(&key, &zero)```
 
-Lookup the key in the map, and return a pointer to its value if it exists, else initialize the key's value to the second argument. This is often used to initialize values to zero.
+Lookup the key in the map, and return a pointer to its value if it exists, else initialize the key's value to the second argument. This is often used to initialize values to zero. If the key cannot be inserted (e.g. the map is full) then NULL is returned.
 
 Examples in situ:
-[search /examples](https://github.com/iovisor/bcc/search?q=lookup_or_init+path%3Aexamples&type=Code),
-[search /tools](https://github.com/iovisor/bcc/search?q=lookup_or_init+path%3Atools&type=Code)
+[search /examples](https://github.com/iovisor/bcc/search?q=lookup_or_try_init+path%3Aexamples&type=Code),
+[search /tools](https://github.com/iovisor/bcc/search?q=lookup_or_try_init+path%3Atools&type=Code)
+
+Note: The old map.lookup_or_init() may cause return from the function, so lookup_or_try_init() is recommended as it
+does not have this side effect.
 
 ### 14. map.delete()
 
@@ -1100,9 +1109,14 @@ Examples in situ:
 
 ### 4. attach_uprobe()
 
-Syntax: ```BPF.attach_uprobe(name="location", sym="symbol", fn_name="name")```
+Syntax: ```BPF.attach_uprobe(name="location", sym="symbol", fn_name="name" [, sym_off=int])```, ```BPF.attach_uprobe(name="location", sym_re="regex", fn_name="name")```, ```BPF.attach_uprobe(name="location", addr=int, fn_name="name")```
 
-Instruments the user-level function ```symbol()``` from either the library or binary named by ```location``` using user-level dynamic tracing of the function entry, and attach our C defined function ```name()``` to be called whenever the user-level function is called.
+
+Instruments the user-level function ```symbol()``` from either the library or binary named by ```location``` using user-level dynamic tracing of the function entry, and attach our C defined function ```name()``` to be called whenever the user-level function is called. If ```sym_off``` is given, the function is attached to the offset within the symbol.
+
+The real address ```addr``` may be supplied in place of ```sym```, in which case ```sym``` must be set to its default value. If the file is a non-PIE executable, ```addr``` must be a virtual address, otherwise it must be an offset relative to the file load address.
+
+Instead of a symbol name, a regular expression can be provided in ```sym_re```. The uprobe will then attach to symbols that match the provided regular expression.
 
 Libraries can be given in the name argument without the lib prefix, or with the full path (/usr/lib/...). Binaries can be given only with the full path (/bin/sh).
 
@@ -1146,8 +1160,8 @@ This will instrument ```strlen()``` function from libc, and call our BPF functio
 Other examples:
 
 ```Python
-b.attach_uprobe(name="c", sym="getaddrinfo", fn_name="do_entry")
-b.attach_uprobe(name="/usr/bin/python", sym="main", fn_name="do_main")
+b.attach_uretprobe(name="c", sym="getaddrinfo", fn_name="do_return")
+b.attach_uretprobe(name="/usr/bin/python", sym="main", fn_name="do_main")
 ```
 
 You can call attach_uretprobe() more than once, and attach your BPF function to multiple user-level functions.
@@ -1592,6 +1606,23 @@ if matched == 0:
 Examples in situ:
 [search /examples](https://github.com/iovisor/bcc/search?q=num_open_kprobes+path%3Aexamples+language%3Apython&type=Code),
 [search /tools](https://github.com/iovisor/bcc/search?q=num_open_kprobes+path%3Atools+language%3Apython&type=Code)
+
+### 5. get_syscall_fnname()
+
+Syntax: ```BPF.get_syscall_fnname(name : str)```
+
+Return the corresponding kernel function name of the syscall. This helper function will try different prefixes and use the right one to concatenate with the syscall name. Note that the return value may vary in different versions of linux kernel and sometimes it will causing trouble. (see [#2590](https://github.com/iovisor/bcc/issues/2590))
+
+Example:
+
+```Python
+print("The function name of %s in kernel is %s" % ("clone", b.get_syscall_fnname("clone")))
+# sys_clone or __x64_sys_clone or ...
+```
+
+Examples in situ:
+[search /examples](https://github.com/iovisor/bcc/search?q=get_syscall_fnname+path%3Aexamples+language%3Apython&type=Code),
+[search /tools](https://github.com/iovisor/bcc/search?q=get_syscall_fnname+path%3Atools+language%3Apython&type=Code)
 
 # BPF Errors
 
